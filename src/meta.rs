@@ -91,7 +91,8 @@ pub enum ContainerStorage {
 
 #[repr(C)]
 pub struct ContainerIVtable {
-    pub destructor: extern "thiscall" fn(this: &ContainerI, flag: bool),
+    pub destructor: extern "thiscall" fn(this: &ContainerI),
+    pub deleter: extern "thiscall" fn(this: &ContainerI),
     pub get_size: extern "thiscall" fn(this: &ContainerI, instance: usize) -> usize,
     pub set_size: extern "thiscall" fn(this: &ContainerI, instance: usize, size: usize),
     pub get_mut: extern "thiscall" fn(this: &ContainerI, instance: usize, index: usize) -> usize,
@@ -154,7 +155,8 @@ pub enum MapStorage {
 
 #[repr(C)]
 pub struct MapConstIterIVtable {
-    pub destructor: extern "thiscall" fn(this: &mut MapConstIterI, flag: bool),
+    pub destructor: extern "thiscall" fn(this: &mut MapConstIterI),
+    pub deleter: extern "thiscall" fn(this: &MapConstIterI),
     pub has_next: extern "thiscall" fn(this: &MapConstIterI) -> bool,
     pub next: extern "thiscall" fn(this: &mut MapConstIterI) -> usize,
     pub get_key: extern "thiscall" fn(this: &MapConstIterI) -> usize,
@@ -173,7 +175,7 @@ pub struct MapConstIter<'a> {
 
 impl<'a> Drop for MapConstIter<'a> {
     fn drop(&mut self) {
-        (self.ptr.vtable.destructor)(self.ptr, true);
+        (self.ptr.vtable.deleter)(self.ptr);
     }
 }
 
@@ -192,11 +194,12 @@ impl<'a> Iterator for MapConstIter<'a> {
 
 #[repr(C)]
 pub struct MapIVtable {
-    pub destructor: extern "thiscall" fn(this: &MapI, flag: bool),
+    pub destructor: extern "thiscall" fn(this: &MapI),
+    pub deleter: extern "thiscall" fn(this: &MapI),
     pub get_size: extern "thiscall" fn(this: &MapI, instance: usize) -> usize,
     pub reserve_size: extern "thiscall" fn(this: &MapI, instance: usize, size: usize),
     pub finalize: extern "thiscall" fn(this: &MapI, instance: usize),
-    pub find: extern "thiscall" fn(this: &MapI, instance: usize, key: usize) -> Option<usize>,
+    pub find: extern "thiscall" fn(this: &MapI, instance: usize, key: usize) -> usize,
     pub clear: extern "thiscall" fn(this: &MapI, instance: usize),
     pub create: extern "thiscall" fn(this: &MapI, instance: usize, key: usize) -> usize,
     pub inplace_ctor: extern "thiscall" fn(this: &MapI, instance: usize, key: usize) -> usize,
@@ -247,6 +250,7 @@ pub struct Property {
     pub value_type: BinType,
     pub container: Option<&'static ContainerI>,
     pub map: Option<&'static MapI>,
+    // added in 13.13
     pub unkptr: usize,
 }
 
