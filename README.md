@@ -1,19 +1,21 @@
 Dumping league metaclasses
 
+
 Build instructions:
+** Install Ubuntu 22.04 under WSL or docker or w/e **
 ```
-rustup target add x86_64-pc-windows-msvc
+# Install llvm implementation of C++ standard library
+sudo apt install libc++1
+
+# Build
 cargo build --release
 ```
 
 Usage Instructions:
 ```
-# Download (or copy) league .exe and .dlls
-fckrman dl manifest.manifest -o Game -p '.+\.(dll|exe)'
+# Download (or copy) league executable
+rmand-dl -p '.+/LeagueofLegends' manifest.manifest ./Game
 
-# Copy built TextShaping.dll into Game folder
-cp target/x86_64-pc-windows-msvc/release/TextShaping.dll Game/TextShaping.dll
-
-# Start league via double click or running from command line
-League\ of\ Legends.exe
+# Dump
+cargo run --release -- ./Game/LeagueofLegends.app/Contents/MacOS/LeagueofLegends
 ```
