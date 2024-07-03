@@ -30,7 +30,9 @@ impl<'a, T> RiotVector<T> {
     }
 
     pub fn slice(&self) -> &'a [T] {
-        unsafe { std::slice::from_raw_parts(self.data, self.size()) }
+        (self.size != 0)
+            .then(|| unsafe { std::slice::from_raw_parts(self.data, self.size()) })
+            .unwrap_or_default()
     }
 }
 
