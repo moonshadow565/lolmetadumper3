@@ -2,6 +2,7 @@ use anyhow::bail;
 use goblin::mach::bind_opcodes::BIND_TYPE_POINTER;
 use goblin::mach::constants::*;
 use goblin::mach::{load_command::CommandVariant, MachO};
+use goblin::mach::exports::ExportInfo;
 use mmap::{MapOption, MemoryMap};
 use scroll::{Pread, Uleb128};
 
@@ -23,6 +24,30 @@ pub struct MachOImport {
     pub addend: i64,
     pub is_lazy: bool,
     pub is_weak: bool,
+}
+
+#[derive(Debug, Clone)]
+pub enum MachOExportKind {
+    Regular {
+        address: u64
+    },
+    ReExport {
+        lib: String,
+        lib_symbol_name: Option<String>,
+    },
+    Stub {
+        stub_offset: Uleb128,
+        resolver_offset: Uleb128,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct MachOExport {
+    pub name: String,
+    pub kind: MachOExportKind,
+    pub flags: u64,
+    pub size: usize,
+    pub offset: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -54,6 +79,15 @@ pub struct MachOSegment {
     pub sections: Vec<MachOSection>,
 }
 
+#[derive(Debug, Clone, Default)]
+#[allow(dead_code)]
+pub struct MachOTlv {
+    pub start: u64,
+    pub size: u64,
+    pub var_ranges: Vec<(u64, u64)>,
+    pub func_ranges: Vec<(u64, u64)>,
+}
+
 #[derive(Debug, Clone)]
 #[allow(dead_code)]
 pub struct MachOImage {
@@ -62,6 +96,21 @@ pub struct MachOImage {
     pub segments: Vec<MachOSegment>,
     pub imports: Vec<MachOImport>,
     pub rebase: Vec<MachORebase>,
+    pub exports: Vec<MachOExport>,
+    pub entry: u64,
+    pub tlv: MachOTlv,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+struct TlvDescriptor {
+    pub thunk: extern "C" fn(desc: *const TlvDescriptor) -> usize,
+    pub opaq: usize,
+    pub offset: usize,
+}
+
+extern "C" fn tlv_thunk(desc: *const TlvDescriptor) -> usize {
+    unsafe { (*desc).opaq }
 }
 
 impl MachOImage {
@@ -120,6 +169,63 @@ impl MachOImage {
                 is_lazy: i.is_lazy,
                 is_weak: i.is_weak,
             });
+        }
+
+        let mut exports = Vec::new();
+        for e in macho.exports()? {
+            exports.push(match e.info{
+                ExportInfo::Regular { address, flags } => MachOExport {
+                    name: e.name.to_owned(),
+                    kind: MachOExportKind::Regular {
+                        address,
+                    },
+                    flags: flags,
+                    size: e.size,
+                    offset: e.offset,
+                },
+                ExportInfo::Reexport { lib, lib_symbol_name, flags }  => MachOExport {
+                    name: e.name.to_owned(),
+                    kind: MachOExportKind::ReExport {
+                        lib: lib.to_owned(),
+                        lib_symbol_name: lib_symbol_name.map( |x| x.to_owned()),
+                    },
+                    flags: flags,
+                    size: e.size,
+                    offset: e.offset,
+                },
+                ExportInfo::Stub { stub_offset, resolver_offset, flags } => MachOExport {
+                    name: e.name.to_owned(),
+                    kind: MachOExportKind::Stub {
+                        stub_offset,
+                        resolver_offset
+                    },
+                    flags: flags,
+                    size: e.size,
+                    offset: e.offset,
+                }
+            });
+        }
+
+        let mut tlv = MachOTlv::default();
+        for seg in macho.segments.iter() {
+            for (sect, _) in seg.sections()?.iter() {
+                let kind = sect.flags & 0xFF;
+                if kind == 0x11 || kind == 0x12 {
+                    if tlv.start == 0 || sect.addr < tlv.start {
+                        tlv.start = sect.addr;
+                    }
+                    let size = ((((sect.addr + sect.size) - tlv.start) + 0x10 - 1) / 0x10) * 0x10;
+                    if tlv.size == 0 || size > tlv.size {
+                        tlv.size = size;
+                    }
+                }
+                if kind == 0x13 {
+                    tlv.var_ranges.push((sect.addr, sect.size))
+                }
+                if kind == 0x15 {
+                    tlv.func_ranges.push((sect.addr, sect.size))
+                }
+            }
         }
 
         // Goblin does not read 10.6+ relocations :(
@@ -204,12 +310,17 @@ impl MachOImage {
             }
         }
 
+        let entry = macho.entry;
+
         Ok(Self {
             vmbase,
             vmsize,
             segments,
             imports,
             rebase,
+            exports,
+            entry,
+            tlv,
         })
     }
 
@@ -305,6 +416,40 @@ impl MachOImage {
         }
     }
 
+    pub fn resolve_exports<R: Fn(&str, usize) -> bool>(&self, image: &mut [u8], resolver: R) {
+        for e in self.exports.iter() {
+            match e.kind {
+                MachOExportKind::Regular { address } => {
+                    resolver(&e.name, image.as_ptr() as usize + (address as usize));
+                },
+                _ => {},
+            }
+        }
+    }
+
+    pub fn fixup_tlv(&self, image: &mut [u8]) {
+        // NOTE: this is horribly wrong
+        // This should in fact allocate a new pthread_key and then in thunk:
+        // 1. pthread_getspecific to check if there is already data allocated and return early
+        // 2. malloc(tlv.size) and pthread_setspecific new data
+        // 3. call tlv.func_ranges to init new tread specific data
+        // Additionally tlv_thunk should be [[clang::preserveall]].
+        for (addr, size) in &self.tlv.var_ranges {
+            let mut i = addr - self.vmbase;
+            let end = i + size;
+            while i < end {
+                unsafe { 
+                    let p = image.as_mut_ptr().offset(i as _) as usize as *mut TlvDescriptor;
+                    let mut desc = (*p).clone();
+                    desc.thunk = tlv_thunk;
+                    desc.opaq = image.as_ptr().offset(self.tlv.start as _).offset(desc.offset as _) as _;
+                    *p = desc;
+                };
+                i += std::mem::size_of::<TlvDescriptor>() as u64;
+            }
+        }
+    }
+
     pub fn run_mod_init(&self, image: &[u8]) {
         // Collect all inits.
         let mut init = Vec::<extern "C" fn()>::new();
@@ -327,5 +472,10 @@ impl MachOImage {
         for f in init {
             f();
         }
+    }
+
+    pub fn get_entry(&self, image: &[u8]) -> extern "C" fn() {
+        let target = image.as_ptr() as usize + (self.entry - self.vmbase) as usize;
+        unsafe { std::mem::transmute(target) }
     }
 }

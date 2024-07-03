@@ -189,7 +189,7 @@ fn dump_property(base: usize, property: &Property) -> Value {
         "value_type": property.value_type,
         "container": property.container.map(|c| dump_property_container(base, c, property.value_type)),
         "map": property.map.map(|m| dump_property_map(base, m)),
-        "unkptr": dump_hex(property.unkptr),
+        "unkptr": dump_hex(0 as usize),
     })
 }
 
@@ -241,15 +241,13 @@ fn is_empty(class: &Class) -> bool {
 
 pub fn dump_class_defaults(class: &Class) -> Value {
     if class.constructor_fn.is_some() {
-        // FIXME: broken on macos (and maybe broken in general???)
-        Map::new().into()
-        // let mut results = Map::new();
-        // if !is_empty(class) {
-        //     let instance = class.create_instance();
-        //     dump_instance_properties(class, instance, &mut results);
-        //     class.destroy_instance(instance);
-        // }
-        // results.into()
+        let mut results = Map::new();
+        if !is_empty(class) {
+            let instance = class.create_instance();
+            dump_instance_properties(class, instance, &mut results);
+            class.destroy_instance(instance);
+        }
+        results.into()
     } else {
         Value::Null
     }
