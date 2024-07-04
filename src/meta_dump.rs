@@ -53,12 +53,18 @@ fn dump_instance_path(instance: usize) -> Value {
     dump_hex(result).into()
 }
 
-fn dump_instance_embed(_instance: usize, _class: &Class) -> Value {
-    Map::new().into()
+fn dump_instance_embed(instance: usize, class: &Class) -> Value {
+    let mut results = Map::new();
+    dump_instance_properties(class, instance, &mut results);
+    results.into()
 }
 
-fn dump_instance_pointer(_instance: usize, _class: &Class) -> Value {
-    Value::Null
+fn dump_instance_pointer(instance: usize, class: &Class) -> Value {
+    let instance = unsafe { *(instance as *const usize) };
+    if instance != 0 {
+        return dump_instance_embed(instance, class);
+    }
+    return Value::Null;
 }
 
 fn dump_instance_list(instance: usize, container: &ContainerI, class: Option<&Class>) -> Value {
@@ -146,12 +152,12 @@ fn dump_instance_property(instance: usize, property: &Property) -> Value {
 
 fn dump_instance_properties(class: &Class, instance: usize, results: &mut Map<String, Value>) {
     if let Some(class) = class.base_class {
-        if class.constructor_fn.is_none() {
+        if true || class.constructor_fn.is_none() {
             dump_instance_properties(class, instance, results);
         }
     }
     for &BaseOff(class, offset) in class.secondary_bases.slice() {
-        if class.constructor_fn.is_none() {
+        if true || class.constructor_fn.is_none() {
             dump_instance_properties(class, instance + offset as usize, results);
         }
     }
