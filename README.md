@@ -7,6 +7,8 @@ Build instructions:
 # Install llvm implementation of C++ standard library
 sudo apt install libc++1
 
+sudo apt install build-essential cmake
+
 # Build
 cargo build --release
 ```
