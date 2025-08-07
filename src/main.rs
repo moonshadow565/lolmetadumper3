@@ -13,10 +13,24 @@ mod meta_dump;
 
 type MetaVector = meta::RiotVector<&'static meta::Class>;
 
-const PATTERN_CLASSES: &str = r"(?s-u)\x48\x8D\x3D(....)\x48?\x89\xDE\xE8....\x48\x83\xC4\x08\x5B\x5D\xFF\x60\x10";
+const PATTERN_CLASSES: &str =
+    r"(?s-u)\x48\x8D\x3D(....)\x48?\x89\xDE\xE8....\x48\x83\xC4\x08\x5B\x5D\xFF\x60\x10";
 
 #[allow(dead_code)]
 const PATTERN_VERSION: &str = r"(?s-u)\x00Releases/(\d+(\.\d+)+)\x00";
+
+/*
+version_tag     db 'VersionInfoTag!',0
+version_patch   dd 6AABBCh
+build_date      db '16:49:39',0
+build_time      db 'Jul 24 2025',0
+                db    2
+version_major   dw 0Fh
+version_minor   dw 0Fh
+                dq 0
+*/
+#[allow(dead_code)]
+const PATTERN_VERSION2: &str = r"(?s-u)VersionInfoTag!\x00(....)\d{1,2}:\d{1,2}:\d{1,2}\x00\w{1,4} \d{1,2} \d{4}\x00\x02(..)(..)\x00{8,8}";
 
 fn find_version(data: &[u8]) -> Option<String> {
     Regex::new(PATTERN_VERSION)
@@ -24,6 +38,30 @@ fn find_version(data: &[u8]) -> Option<String> {
         .captures(data)
         .and_then(|captures| captures.get(1))
         .map(|x| { String::from_utf8_lossy(x.as_bytes()) }.to_string())
+}
+
+fn find_version2(data: &[u8]) -> Option<String> {
+    Regex::new(PATTERN_VERSION2)
+        .expect("Bad regex PATTERN_VERSION2!")
+        .captures(data)
+        .map(|captures| {
+            let patch = captures
+                .get(1)
+                .expect("PATTERN_VERSION2 missing capture group1")
+                .as_bytes();
+            let major = captures
+                .get(2)
+                .expect("PATTERN_VERSION2 missing capture group2")
+                .as_bytes();
+            let minor = captures
+                .get(3)
+                .expect("PATTERN_VERSION2 missing capture group3")
+                .as_bytes();
+            let patch = u32::from_le_bytes(patch.try_into().expect("Invalid patch length!"));
+            let major = u16::from_le_bytes(major.try_into().expect("Invalid major length!"));
+            let minor = u16::from_le_bytes(minor.try_into().expect("Invalid minor length!"));
+            format!("{}.{}.{}", major, minor, patch)
+        })
 }
 
 fn find_classes(data: &[u8]) -> &MetaVector {
@@ -50,7 +88,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     eprintln!("Mapped at: {:#x}", data.as_ptr() as usize);
 
     eprintln!("Extracting version info...");
-    let version = find_version(data);
+    let version = find_version(data).or_else(|| find_version2(data));
     eprintln!("Found version: {:?}", version);
 
     eprintln!("Finding metaclasses...");
